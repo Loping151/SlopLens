@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["Loping151"]
 license = "MIT"
 description = "Git-aware AI code debt scanner: who introduced debt, when, and was AI suspected"
-repository = "https://github.com/Loping151/slop-lens"
+repository = "https://github.com/Loping151/SlopLens"
 
 [dependencies]
 anyhow = "1"

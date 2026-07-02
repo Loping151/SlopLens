@@ -1,8 +1,16 @@
+<p align="center">
+  <img src="assets/logo-small.png" width="120" alt="SlopLens logo">
+</p>
+
 # SlopLens
 
 SlopLens tells you WHO introduced debt, WHEN, and whether AI was suspected — not just WHERE it is.
 
 Who broke your codebase, and was it AI?
+
+<p align="center">
+  <img src="assets/teaser.png" width="640" alt="SlopLens teaser">
+</p>
 
 SlopLens 是一个面向 git 仓库的代码债归因平台：它不只指出代码债在哪里，还会追溯是谁在何时引入，以及该提交是否存在 AI 辅助嫌疑。
 
