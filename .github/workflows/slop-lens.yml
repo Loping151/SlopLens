@@ -1,0 +1,37 @@
+name: SlopLens
+
+on:
+  pull_request:
+    paths:
+      - "**/*.rs"
+      - "**/*.go"
+      - "**/*.py"
+      - "**/*.js"
+      - "**/*.ts"
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build SlopLens
+        run: cargo build --locked
+      - name: Run SlopLens SARIF scan
+        if: github.event_name == 'pull_request'
+        run: cargo run --locked -- scan --repo . --from ${{ github.event.pull_request.base.sha }} --to HEAD --format sarif --out slop-lens.sarif
+      - name: Run SlopLens SARIF scan
+        if: github.event_name != 'pull_request'
+        run: cargo run --locked -- scan --repo . --format sarif --out slop-lens.sarif
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: slop-lens.sarif
