@@ -30,6 +30,7 @@ pub enum FileChangeKind {
     Add,
     Modify,
     Delete,
+    Rename,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -124,7 +125,11 @@ pub struct Summary {
     pub author_count: usize,
     pub file_count: usize,
     pub finding_count: usize,
+    #[serde(default)]
+    pub total_loc: usize,
     pub total_debt_score: f64,
+    #[serde(default)]
+    pub debt_index: f64,
     pub ai_attributed_debt: f64,
     pub ai_attributed_ratio: f64,
     #[serde(default)]
@@ -156,6 +161,8 @@ pub struct RangeSummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DebtTimelinePoint {
     pub commit_oid: String,
+    #[serde(default)]
+    pub commit_message: String,
     pub commit_time: i64,
     pub cumulative_debt_score: f64,
     pub debt_delta: f64,
@@ -164,6 +171,10 @@ pub struct DebtTimelinePoint {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SlopReport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_url: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub commit_messages: BTreeMap<String, String>,
     pub findings: Vec<Finding>,
     pub attributions: Vec<Attribution>,
     pub file_scores: BTreeMap<PathBuf, f64>,

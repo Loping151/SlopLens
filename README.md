@@ -71,12 +71,24 @@ Supported formats:
 支持的输出格式：
 
 ```text
-terminal, html, json, sarif
+terminal, summary, html, json, sarif
 ```
+
+Use `summary` for compact CI comments or quick terminal checks:
+
+`summary` 适合 CI 评论或快速概览：
+
+```bash
+slop-lens scan --repo . --format summary
+```
+
+Download release binaries from the GitHub Releases page for your platform, then put the `slop-lens` binary on your `PATH`.
+
+也可以从 GitHub Releases 下载对应平台的发布二进制，并把 `slop-lens` 放到 `PATH` 中。
 
 ## Demo / 演示
 
-The demo command creates a synthetic temporary git repository, scans it, prints or writes the report, and removes the temporary repository before exiting.
+The demo command creates a synthetic temporary git repository, scans it, prints or writes the report, and removes the temporary repository before exiting. Demo output is marked as a synthetic sample because its debt index may saturate by design.
 
 `demo` 命令会创建一个临时合成 git 仓库，完成扫描并输出报告，然后在退出前删除临时仓库。
 
@@ -103,27 +115,67 @@ slop-lens demo --format html --out demo-report.html
 
 `SL-004` 注释膨胀候选：当前注释/代码比例明显高于历史新增行基线。
 
+## Configuration / 配置
+
+SlopLens reads `.sloplens.yml` from the scanned repository. `ignore_paths` extends the default ignores (`vendor`, `generated`, `dist`, `build`, `target`, `node_modules`). `rules` can disable a rule or tune a rule threshold.
+
+SlopLens 会读取扫描仓库根目录下的 `.sloplens.yml`。`ignore_paths` 会追加到默认忽略目录；`rules` 可以关闭规则或调整阈值。
+
+```yaml
+ignore_paths:
+  - fixtures/**
+  - third_party
+rules:
+  SL-001:
+    enabled: true
+  SL-002:
+    enabled: true
+  SL-003:
+    enabled: true
+    threshold: 80
+  SL-004:
+    enabled: false
+```
+
+Currently `threshold` is used by `SL-003` as the long-function line threshold.
+
+当前 `threshold` 用于 `SL-003`，表示长函数行数阈值。
+
+## Language Support / 语言支持
+
+Supported source extensions are `.rs`, `.go`, `.py`, `.js`, and `.ts`.
+
+当前支持的源码扩展名为 `.rs`、`.go`、`.py`、`.js` 和 `.ts`。
+
+```text
+Rust: tree-sitter parser, mature
+Go: tree-sitter parser, mature
+Python: fallback parser, experimental
+JavaScript: fallback parser, experimental
+TypeScript: fallback parser, experimental
+```
+
 ## AI Attribution / AI 归因
 
 SlopLens treats explicit metadata as strong evidence, including AI-related trailers, Copilot mentions, `Generated-by: AI`, `AI-Assisted`, and GitHub web authoring metadata. Burst timing alone is not used as an AI signal; it only contributes a small weak signal when the commit is also large and touches multiple files.
 
 SlopLens 将明确元数据视为强信号，例如 AI 相关 trailer、Copilot 提及、`Generated-by: AI`、`AI-Assisted` 和 GitHub web authoring 元数据。单纯的短时间连续提交不会被当作 AI 信号；只有同时满足大 diff、多文件等条件时，才会贡献很小的弱信号。
 
-## Debt Score / 债务分数
+## Debt Index / 债务指数
 
-Score scale:
+Debt index scale:
 
-分数标尺：
+债务指数标尺：
 
 ```text
-0-50 low
-50-150 medium
->150 high
+0-40 low
+40-70 medium
+>70 high
 ```
 
-The score combines severity, confidence, persistence, and the estimated AI-attributed slice.
+The debt index normalizes the underlying debt score by repository size and clamps it to 0-100.
 
-分数由严重程度、置信度、持续时间和估算的 AI 归因占比共同决定。
+债务指数会按仓库规模归一化底层债务分数，并限制在 0-100。
 
 ## CI / 持续集成
 
@@ -144,4 +196,15 @@ SARIF output can be uploaded by CI systems that support code scanning:
 
 ```bash
 slop-lens scan --repo . --format sarif --out slop-lens.sarif
+```
+
+Fail a CI job on severe findings or a debt budget:
+
+按严重问题或债务预算让 CI 失败：
+
+```bash
+slop-lens scan --repo . --fail-on error
+slop-lens scan --repo . --fail-on warning
+slop-lens scan --repo . --max-debt 50
+slop-lens scan --repo . --format summary --max-debt 50
 ```

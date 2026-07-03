@@ -77,16 +77,9 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - name: Generate demo GIF
-        run: |
-          curl -L --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source "$HOME/.cargo/env"
-          cargo build --release
-          ./target/release/slop-lens demo --out hero.gif
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/*.tar.gz
             artifacts/*.zip
-            hero.gif
           generate_release_notes: true

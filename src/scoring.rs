@@ -60,12 +60,20 @@ pub fn score(
         .map(|c| c.path.clone())
         .collect::<HashSet<_>>()
         .len();
+    let total_loc = total_loc_from_changes(history);
+    let debt_index = if total_loc > 0 {
+        (total_debt / total_loc as f64 * 1000.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
     let summary = Summary {
         commit_count: history.commits.len(),
         author_count,
         file_count,
         finding_count: findings.len(),
+        total_loc,
         total_debt_score: round2(total_debt),
+        debt_index: round2(debt_index),
         ai_attributed_debt: round2(ai_debt),
         ai_attributed_ratio: if total_debt > 0.0 {
             round2(ai_debt / total_debt)
@@ -78,7 +86,14 @@ pub fn score(
         *score = round2(*score);
     }
     let debt_timeline = debt_timeline(history, &debt_by_commit, &attr_by_commit);
+    let commit_messages = history
+        .commits
+        .iter()
+        .map(|commit| (commit.oid.clone(), commit.message.clone()))
+        .collect();
     SlopReport {
+        repo_url: history.repo_url.clone(),
+        commit_messages,
         findings,
         attributions,
         file_scores,
@@ -113,6 +128,7 @@ fn debt_timeline(
         if delta > 0.0 || ai_probability >= 0.3 {
             points.push(DebtTimelinePoint {
                 commit_oid: commit.oid.clone(),
+                commit_message: commit.message.clone(),
                 commit_time: commit.commit_time,
                 cumulative_debt_score: round2(cumulative),
                 debt_delta: round2(delta),
@@ -121,6 +137,19 @@ fn debt_timeline(
         }
     }
     points
+}
+
+fn total_loc_from_changes(history: &GitHistory) -> usize {
+    let mut lines_by_file: HashMap<PathBuf, isize> = HashMap::new();
+    for change in &history.changes {
+        let entry = lines_by_file.entry(change.path.clone()).or_insert(0);
+        *entry += change.lines_added as isize;
+        *entry -= change.lines_deleted as isize;
+    }
+    lines_by_file
+        .values()
+        .map(|lines| (*lines).max(0) as usize)
+        .sum()
 }
 
 #[cfg(test)]
@@ -135,6 +164,7 @@ mod tests {
             email: "a@example.com".into(),
         };
         let history = GitHistory {
+            repo_url: None,
             commits: vec![
                 Commit {
                     oid: "a".into(),
@@ -178,6 +208,7 @@ mod tests {
         }];
         let report = score(&history, vec![finding], attrs);
         assert_eq!(report.summary.total_debt_score, 1.2);
+        assert_eq!(report.summary.debt_index, 0.0);
         assert_eq!(report.summary.ai_attributed_debt, 0.6);
         assert_eq!(report.finding_scores["fp"], 1.2);
         assert_eq!(report.debt_timeline[0].cumulative_debt_score, 1.2);

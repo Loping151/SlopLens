@@ -1,6 +1,6 @@
 use crate::git_ingest::GitHistory;
 use crate::ir::Attribution;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub fn attribute(history: &GitHistory) -> Vec<Attribution> {
     let mut by_commit: HashMap<&str, CommitStats> = HashMap::new();
@@ -18,6 +18,7 @@ pub fn attribute(history: &GitHistory) -> Vec<Attribution> {
             stats.test_doc_files += 1;
         }
     }
+    let burst_commits = large_multifile_burst_commits(history, &by_commit);
 
     let mut author_history: HashMap<String, Vec<CommitProfile>> = HashMap::new();
     let mut results = Vec::new();
@@ -28,23 +29,23 @@ pub fn attribute(history: &GitHistory) -> Vec<Attribution> {
             .unwrap_or_default();
         let mut evidence = Vec::new();
         let mut score = 0.0f64;
+        let mut has_strong_evidence = false;
 
-        for trailer in &commit.trailers {
+        let mut seen_trailers = HashSet::new();
+        for trailer in commit
+            .trailers
+            .iter()
+            .filter(|trailer| seen_trailers.insert(trailer.trim().to_ascii_lowercase()))
+        {
             let lower = trailer.to_ascii_lowercase();
-            if lower.contains("copilot")
-                || lower.contains("bot")
-                || lower.contains("ai")
-                || lower.contains("github.dev")
-                || lower.contains("users.noreply.github.dev")
-            {
+            if has_ai_keyword(&lower) || lower.contains("bot") || lower.contains("github.dev") {
                 evidence.push(format!("trailer:{trailer}(+0.9)"));
                 score += 0.9;
+                has_strong_evidence = true;
             }
         }
         let lower_message = commit.message.to_ascii_lowercase();
-        if lower_message.contains("copilot")
-            || lower_message.contains("generated-by: ai")
-            || lower_message.contains("ai-assisted")
+        if has_ai_keyword(&lower_message)
             || commit
                 .author
                 .email
@@ -53,6 +54,7 @@ pub fn attribute(history: &GitHistory) -> Vec<Attribution> {
         {
             evidence.push("metadata:AI or GitHub web authoring(+0.9)".into());
             score += 0.9;
+            has_strong_evidence = true;
         }
 
         let churn = stats.lines_added + stats.lines_deleted;
@@ -62,14 +64,9 @@ pub fn attribute(history: &GitHistory) -> Vec<Attribution> {
                 stats.files
             ));
             score += 0.5;
+            has_strong_evidence = true;
         }
-        if is_large_multifile_burst_commit(
-            history,
-            &commit.oid,
-            commit.commit_time,
-            &commit.author.identity_key(),
-            &stats,
-        ) {
+        if burst_commits.contains(commit.oid.as_str()) {
             evidence.push(
                 "burst:large multi-file commit landed within 60 seconds of same-author work(+0.1)"
                     .into(),
@@ -82,7 +79,7 @@ pub fn attribute(history: &GitHistory) -> Vec<Attribution> {
         }
         let key = commit.author.identity_key();
         let profiles = author_history.entry(key).or_default();
-        if profiles.len() >= 2 {
+        if has_strong_evidence && profiles.len() >= 2 {
             let avg_churn =
                 profiles.iter().map(|p| p.churn as f64).sum::<f64>() / profiles.len() as f64;
             let avg_msg =
@@ -91,9 +88,9 @@ pub fn attribute(history: &GitHistory) -> Vec<Attribution> {
                 || (commit.message.len() as f64) > (avg_msg * 3.0).max(80.0)
             {
                 evidence.push(
-                    "style:author style/churn changed sharply versus prior commits(+0.5)".into(),
+                    "style:author style/churn changed sharply versus prior commits(+0.15)".into(),
                 );
-                score += 0.5;
+                score += 0.15;
             }
         }
 
@@ -102,21 +99,12 @@ pub fn attribute(history: &GitHistory) -> Vec<Attribution> {
             evidence.push(format!("msg:{subject}(+0.2)"));
             score += 0.2;
         }
-        if stats.files > 0
-            && stats.lines_added > 0
-            && stats.lines_deleted == 0
-            && stats.lines_added % stats.files.max(1) == 0
-        {
-            evidence.push("shape:unusually even additive churn across touched files(+0.2)".into());
-            score += 0.2;
-        }
-
         profiles.push(CommitProfile {
             churn,
             message_len: commit.message.len(),
         });
 
-        if evidence.is_empty() || score < 0.3 {
+        if evidence.is_empty() || score < 0.5 || !has_strong_evidence {
             continue;
         }
         results.push(Attribution {
@@ -155,21 +143,64 @@ fn weak_template_message(message: &str) -> bool {
         || trimmed.starts_with("refactor ")
 }
 
-fn is_large_multifile_burst_commit(
-    history: &GitHistory,
-    oid: &str,
-    time: i64,
-    author_key: &str,
-    stats: &CommitStats,
-) -> bool {
-    let churn = stats.lines_added + stats.lines_deleted;
-    churn > 100
-        && stats.files >= 3
-        && history.commits.iter().any(|other| {
-            other.oid != oid
-                && other.author.identity_key() == author_key
-                && (other.commit_time - time).abs() <= 60
-        })
+fn has_ai_keyword(text: &str) -> bool {
+    [
+        "copilot",
+        "claude",
+        "cursor",
+        "gpt",
+        "gemini",
+        "chatgpt",
+        "deepseek",
+        "generated-by: ai",
+        "generated by ai",
+        "generated with",
+        "ai-assisted",
+        "refactored by",
+        "users.noreply.github.dev",
+    ]
+    .iter()
+    .any(|keyword| text.contains(keyword))
+}
+
+fn large_multifile_burst_commits<'a>(
+    history: &'a GitHistory,
+    by_commit: &HashMap<&str, CommitStats>,
+) -> HashSet<&'a str> {
+    let mut by_author: HashMap<String, Vec<(&'a str, i64)>> = HashMap::new();
+    for commit in &history.commits {
+        by_author
+            .entry(commit.author.identity_key())
+            .or_default()
+            .push((commit.oid.as_str(), commit.commit_time));
+    }
+
+    let mut burst_commits = HashSet::new();
+    for commits in by_author.values_mut() {
+        commits.sort_by_key(|(_, commit_time)| *commit_time);
+        let mut left = 0usize;
+        let mut right = 0usize;
+        for idx in 0..commits.len() {
+            while commits[idx].1 - commits[left].1 > 60 {
+                left += 1;
+            }
+            while right < commits.len() && commits[right].1 - commits[idx].1 <= 60 {
+                right += 1;
+            }
+            if right.saturating_sub(left) > 1
+                && by_commit
+                    .get(commits[idx].0)
+                    .is_some_and(is_large_multifile_commit)
+            {
+                burst_commits.insert(commits[idx].0);
+            }
+        }
+    }
+    burst_commits
+}
+
+fn is_large_multifile_commit(stats: &CommitStats) -> bool {
+    stats.lines_added + stats.lines_deleted > 100 && stats.files >= 3
 }
 
 #[cfg(test)]
@@ -205,6 +236,7 @@ mod tests {
     #[test]
     fn strong_ai_trailer_gets_high_probability() {
         let history = GitHistory {
+            repo_url: None,
             commits: vec![commit(
                 "a",
                 "feature",
@@ -221,6 +253,7 @@ mod tests {
     #[test]
     fn medium_large_low_coordination_diff_is_detected() {
         let history = GitHistory {
+            repo_url: None,
             commits: vec![commit("a", "add generated helpers", vec![], 1)],
             changes: vec![change("a", 250, "src/lib.rs")],
             hunks: vec![],
@@ -238,6 +271,7 @@ mod tests {
     #[test]
     fn weak_template_message_has_low_probability() {
         let history = GitHistory {
+            repo_url: None,
             commits: vec![commit("a", "update", vec![], 1)],
             changes: vec![change("a", 3, "src/lib.rs")],
             hunks: vec![],
@@ -247,8 +281,68 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_ai_trailers_count_once() {
+        let trailer = "Co-authored-by: Copilot <bot@example.com>";
+        let history = GitHistory {
+            repo_url: None,
+            commits: vec![commit("a", "feature", vec![trailer, trailer], 1)],
+            changes: vec![change("a", 10, "src/lib.rs")],
+            hunks: vec![],
+        };
+
+        let attrs = attribute(&history);
+
+        assert_eq!(attrs.len(), 1);
+        assert_eq!(attrs[0].evidence.len(), 1);
+        assert_eq!(attrs[0].ai_probability, 0.9);
+    }
+
+    #[test]
+    fn style_change_without_strong_evidence_does_not_enter_results() {
+        let history = GitHistory {
+            repo_url: None,
+            commits: vec![
+                commit("a", "small manual edit", vec![], 1),
+                commit("b", "another manual edit", vec![], 2),
+                commit(
+                    "c",
+                    "long manual message that is intentionally much longer than the prior messages but has no ai metadata",
+                    vec![],
+                    3,
+                ),
+            ],
+            changes: vec![
+                change("a", 10, "src/a.rs"),
+                change("b", 12, "src/b.rs"),
+                change("c", 150, "src/c.rs"),
+            ],
+            hunks: vec![],
+        };
+
+        let attrs = attribute(&history);
+
+        assert!(attrs.is_empty());
+    }
+
+    #[test]
+    fn expanded_ai_keywords_are_detected() {
+        let history = GitHistory {
+            repo_url: None,
+            commits: vec![commit("a", "generated with claude", vec![], 1)],
+            changes: vec![change("a", 3, "src/lib.rs")],
+            hunks: vec![],
+        };
+
+        let attrs = attribute(&history);
+
+        assert_eq!(attrs.len(), 1);
+        assert!(attrs[0].ai_probability >= 0.9);
+    }
+
+    #[test]
     fn close_commits_do_not_trigger_burst_without_large_multifile_churn() {
         let history = GitHistory {
+            repo_url: None,
             commits: vec![
                 commit("a", "small manual edit", vec![], 1),
                 commit("b", "another small edit", vec![], 30),
